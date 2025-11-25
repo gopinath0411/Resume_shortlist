@@ -1,0 +1,13 @@
+streamlit
+crewai
+crewai-tools
+python-dotenv
+pandas
+pdfplumber
+PyPDF2
+pdfminer.six
+litellm
+langchain-openai 
+
+
+
