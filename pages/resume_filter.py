@@ -140,23 +140,38 @@ if uploaded_files:
                 progress_bar.progress((idx + 1) / len(uploaded_files))
                 continue
             
-            # Parse with agent
+            # Parse with agent - Let agent extract ALL content dynamically
             try:
                 result = parse_resume_with_agent(resume_text)
                 
                 if result.get("status") == "success":
-                    # Extract all data
+                    # Agent extracts content dynamically - no predefined structure
+                    # We take whatever the agent returns
                     data = {
                         "File Name": uploaded_file.name,
-                        "Name": result.get("name", "N/A"),
-                        "Email": result.get("email", "N/A"),
-                        "Phone": result.get("phone", "N/A"),
-                        "Experience (Years)": result.get("experience_years", 0),
-                        "Skills": ", ".join(result.get("skills", [])),
-                        "Education": ", ".join([f"{edu.get('degree', '')} in {edu.get('field', '')}" for edu in result.get("education", [])]),
-                        "Summary": result.get("summary", "N/A"),
                         "Extracted Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
+                    
+                    # Add all fields the agent extracted (dynamic)
+                    for key, value in result.items():
+                        if key == "status":
+                            continue
+                        
+                        # Format the value for display
+                        if isinstance(value, list):
+                            if len(value) > 0 and isinstance(value[0], dict):
+                                # List of dicts (like education, experience)
+                                formatted = " | ".join([str(item) for item in value])
+                                data[key.replace("_", " ").title()] = formatted
+                            else:
+                                # Simple list (like skills)
+                                data[key.replace("_", " ").title()] = ", ".join(str(v) for v in value)
+                        elif isinstance(value, dict):
+                            # Dict - convert to string
+                            data[key.replace("_", " ").title()] = str(value)
+                        else:
+                            # Simple value
+                            data[key.replace("_", " ").title()] = value if value else "N/A"
                     
                     extracted_data.append(data)
                     successful += 1
@@ -218,13 +233,43 @@ if st.session_state.extracted_data:
             os.remove(excel_file)
     
     with col2:
-        # CSV download
-        csv = df.to_csv(index=False)
+        # Word document download
+        from docx import Document
+        from docx.shared import Inches, Pt
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        
+        doc = Document()
+        doc.add_heading('Resume Extraction Report', 0)
+        doc.add_paragraph(f'Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+        doc.add_paragraph(f'Total Resumes: {len(df)}')
+        doc.add_paragraph('')
+        
+        # Add table
+        table = doc.add_table(rows=1, cols=len(df.columns))
+        table.style = 'Light Grid Accent 1'
+        
+        # Header row
+        hdr_cells = table.rows[0].cells
+        for i, column in enumerate(df.columns):
+            hdr_cells[i].text = str(column)
+        
+        # Data rows
+        for _, row in df.iterrows():
+            row_cells = table.add_row().cells
+            for i, value in enumerate(row):
+                row_cells[i].text = str(value)
+        
+        # Save to bytes
+        from io import BytesIO
+        doc_file = BytesIO()
+        doc.save(doc_file)
+        doc_file.seek(0)
+        
         st.download_button(
-            "📥 Download CSV",
-            csv,
-            f"resume_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            "text/csv",
+            "📥 Download Word",
+            doc_file.read(),
+            f"resume_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             use_container_width=True
         )
     
@@ -234,7 +279,7 @@ if st.session_state.extracted_data:
             st.session_state.extracted_data = []
             st.rerun()
     
-    # Statistics
+    # Statistics - Dynamic based on extracted data
     st.markdown("---")
     st.subheader("📊 Statistics")
     
@@ -244,16 +289,31 @@ if st.session_state.extracted_data:
         st.metric("Total Resumes", len(df))
     
     with col2:
-        avg_exp = df["Experience (Years)"].mean()
-        st.metric("Avg Experience", f"{avg_exp:.1f} years")
+        # Count resumes with email
+        email_cols = [col for col in df.columns if 'email' in col.lower()]
+        if email_cols:
+            with_email = len(df[df[email_cols[0]] != "N/A"])
+            st.metric("With Email", with_email)
+        else:
+            st.metric("Columns", len(df.columns))
     
     with col3:
-        total_skills = sum([len(skills.split(", ")) for skills in df["Skills"] if skills != "N/A"])
-        st.metric("Total Skills", total_skills)
+        # Count resumes with phone
+        phone_cols = [col for col in df.columns if 'phone' in col.lower()]
+        if phone_cols:
+            with_phone = len(df[df[phone_cols[0]] != "N/A"])
+            st.metric("With Phone", with_phone)
+        else:
+            st.metric("Fields Extracted", len(df.columns) - 2)
     
     with col4:
-        with_email = len(df[df["Email"] != "N/A"])
-        st.metric("With Email", with_email)
+        # Count resumes with skills
+        skill_cols = [col for col in df.columns if 'skill' in col.lower()]
+        if skill_cols:
+            with_skills = len(df[df[skill_cols[0]] != "N/A"])
+            st.metric("With Skills", with_skills)
+        else:
+            st.metric("Data Points", len(df) * len(df.columns))
 
 else:
     st.info("👆 Upload resumes above to extract information")
