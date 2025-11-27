@@ -28,9 +28,15 @@ except ImportError:
 
 try:
     from docx import Document
+    from docx.shared import Inches, Pt
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
     HAS_DOCX = True
 except ImportError:
     HAS_DOCX = False
+    Document = None
+
+# BytesIO is always available (built-in)
+from io import BytesIO
 
 
 def extract_text_from_file(uploaded_file):
@@ -212,68 +218,92 @@ if st.session_state.extracted_data:
     st.dataframe(df, use_container_width=True, height=400)
     
     # Download buttons
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     
     with col1:
-        # Excel download
-        excel_file = f"resume_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        df.to_excel(excel_file, index=False, engine='openpyxl')
+        # Excel download with formatting
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils.dataframe import dataframe_to_rows
         
-        with open(excel_file, 'rb') as f:
-            st.download_button(
-                "📥 Download Excel",
-                f.read(),
-                excel_file,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+        # Create workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Resume Data"
         
-        # Clean up temp file
-        if os.path.exists(excel_file):
-            os.remove(excel_file)
-    
-    with col2:
-        # Word document download
-        from docx import Document
-        from docx.shared import Inches, Pt
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        # Add title
+        ws.merge_cells('A1:' + chr(64 + len(df.columns)) + '1')
+        title_cell = ws['A1']
+        title_cell.value = "Resume Extraction Report"
+        title_cell.font = Font(size=16, bold=True, color="FFFFFF")
+        title_cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        title_cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 30
         
-        doc = Document()
-        doc.add_heading('Resume Extraction Report', 0)
-        doc.add_paragraph(f'Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
-        doc.add_paragraph(f'Total Resumes: {len(df)}')
-        doc.add_paragraph('')
+        # Add data starting from row 3
+        for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=True), 3):
+            for c_idx, value in enumerate(row, 1):
+                cell = ws.cell(row=r_idx, column=c_idx, value=value)
+                
+                # Header row formatting
+                if r_idx == 3:
+                    cell.font = Font(bold=True, color="FFFFFF", size=11)
+                    cell.fill = PatternFill(start_color="5B9BD5", end_color="5B9BD5", fill_type="solid")
+                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                else:
+                    # Data rows - enable text wrapping
+                    cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+                
+                # Add borders
+                thin_border = Border(
+                    left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin')
+                )
+                cell.border = thin_border
         
-        # Add table
-        table = doc.add_table(rows=1, cols=len(df.columns))
-        table.style = 'Light Grid Accent 1'
+        # Auto-size columns based on content
+        from openpyxl.utils import get_column_letter
         
-        # Header row
-        hdr_cells = table.rows[0].cells
-        for i, column in enumerate(df.columns):
-            hdr_cells[i].text = str(column)
+        for col_idx in range(1, len(df.columns) + 1):
+            max_length = 0
+            column_letter = get_column_letter(col_idx)
+            
+            # Check all cells in this column
+            for row_idx in range(3, ws.max_row + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                try:
+                    if cell.value:
+                        # Calculate length considering line breaks
+                        lines = str(cell.value).split('\n')
+                        max_line_length = max(len(line) for line in lines) if lines else 0
+                        max_length = max(max_length, max_line_length)
+                except:
+                    pass
+            
+            # Set column width (min 15, max 50 characters)
+            adjusted_width = min(max(max_length + 2, 15), 50)
+            ws.column_dimensions[column_letter].width = adjusted_width
         
-        # Data rows
-        for _, row in df.iterrows():
-            row_cells = table.add_row().cells
-            for i, value in enumerate(row):
-                row_cells[i].text = str(value)
+        # Set row heights for data rows
+        for row in range(4, ws.max_row + 1):
+            ws.row_dimensions[row].height = None  # Auto height
         
-        # Save to bytes
-        from io import BytesIO
-        doc_file = BytesIO()
-        doc.save(doc_file)
-        doc_file.seek(0)
+        # Save to BytesIO
+        excel_buffer = BytesIO()
+        wb.save(excel_buffer)
+        excel_buffer.seek(0)
         
         st.download_button(
-            "📥 Download Word",
-            doc_file.read(),
-            f"resume_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "📥 Download Excel",
+            excel_buffer.read(),
+            f"resume_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
     
-    with col3:
+    with col2:
         # Clear data
         if st.button("🗑️ Clear Data", use_container_width=True):
             st.session_state.extracted_data = []
